@@ -1,7 +1,6 @@
 #include "../include/perg.h"
 
 
-
 int main(int argc, char *argv[]) {
     std::vector<std::string> args;
 
@@ -28,6 +27,7 @@ int main(int argc, char *argv[]) {
         std::filesystem::path startPath = ".";
         perg.findAll(startPath);
     }
+
 
     return 0;
 }

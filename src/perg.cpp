@@ -8,19 +8,18 @@
 
 
 Perg::Perg() = default;
+
 Perg::Perg(std::vector<std::string> &args) {
 	this-> args = args;
 	this->argc = args.size();
 }
 
-
-
-bool Perg::needHelp() const {
+// checkhelpPage
+bool Perg::checkHelpArgs() const {
 	return args[1] == std::string("-h") || args[1] == std::string("--help") || args[1] == std::string("-help");
 }
 
-bool Perg::helpCheck() const {
-	if (needHelp()){
+void Perg::printHelpPage() {
 		std::cout << "\nPERG - Parallel grep by Ryan Chui (2017)\n" << std::endl;
 		std::cout << "    perg is a custom multithreaded c++ implementation of grep to search multi gigabyte files, datasets, and\n";
 		std::cout << "    directories developed at the National Center for Supercomputing Applications.\n" << std::endl;
@@ -41,11 +40,17 @@ bool Perg::helpCheck() const {
 		std::cout << "    -w    File Parallelism      Signals perg to perform single-threaded searches of multiple files. Default\n";
 		std::cout << "                                search behavior is to search files one at a time with mulitple threads.\n";
 		std::cout << "                                This is optimal when the files are small, similar size, or there are many.\n" << std::endl;
-		return true;
-	}
-	return false;
 }
 
+void Perg::checkHelpPage() const {
+	if (checkHelpArgs()){
+		printHelpPage();
+		exit(0);
+	}
+}
+
+
+// parseCommandLine
 std::queue<std::string> Perg::serializeSettings() const {
 	std::queue<std::string> settings;
 	for (int i = 1; i < argc; i++) {
@@ -72,14 +77,14 @@ void Perg::handleAfterContextFlag(std::queue<std::string>& settings) {
 	settings.pop();
 }
 
-void Perg::handlePattern(const std::string& arg, std::queue<std::string>& settings) {
+void Perg::handlePattern(const std::string& arg, const std::queue<std::string>& settings) {
 	if (!settings.empty()) {
 		reportError("perg was called incorrectly.");
 	}
 	flags.pattern = arg;
 }
 
-void Perg::validatePattern() {
+void Perg::validatePattern() const {
 	if (flags.pattern.empty()) {
 		reportError("Search pattern not given.");
 	}
@@ -92,6 +97,10 @@ bool Perg::isNextArgOption(const std::string& arg) {
 void Perg::reportError(const std::string& message) {
 	std::cout << "ERROR: " << message << " \"perg -h\" for help." << std::endl;
 	exit(0);
+}
+
+bool Perg::isFlag(const std::string& arg) {
+	return arg.size() > 1 && arg[0] == '-';
 }
 
 void Perg::parseCommandLine() {
@@ -116,161 +125,161 @@ void Perg::parseCommandLine() {
 			} else if (arg == "-A") {
 				handleAfterContextFlag(settings);
 			} else if (arg == "-h" || arg == "--help") {
-				helpCheck();
+				checkHelpPage();
 				exit(0);
 			}
 		} else {
 			if (settings.empty() && flags.pattern.empty()) {
 				flags.pattern = arg;
 			} else {
-				filePaths.push(arg);
+				filePaths.emplace(arg);
 			}
 		}
 	}
-
 	validatePattern();
 }
 
-bool Perg::isFlag(const std::string& arg) {
-	return arg.size() > 1 && arg[0] == '-';
+
+
+
+// printMultiple
+bool Perg::shouldOutputLine(Info& info) const {
+	bool hasMatch = std::regex_search(info.line.begin(), info.line.end(), info.pattern);
+	return (hasMatch && !flags.invert) || (!hasMatch && flags.invert);
 }
 
-bool Perg::needsParameter(const std::string& flag) {
-	return flag == "-f" || flag == "-A";
+std::string Perg::formatOutput(Info& info) const{
+	return (flags.verbose)? info.fileName + ": " + info.line + "\n" :  info.line + "\n";
 }
 
-void Perg::findPatternMatches(std::string& line, std::regex& rgx , std::string & output , std::string& fileName , std::ifstream& file) {
-	if (!std::regex_search(line.begin(), line.end(), rgx) && flags.invert) {
-		output += (flags.verbose)? fileName + ": " + line + "\n" :  line + "\n";
-	} else if (std::regex_search(line.begin(), line.end(), rgx) && !flags.invert) {
-		output += (flags.verbose)? fileName + ": " + line + "\n" :  line + "\n";
+std::string Perg::getExtraLinesIfNeeded(Info& info) const {
+	if (!flags.extra) return "";
 
-		if (flags.extra) {
-			try {
-				for (int j = 0; j < flags.numExtra; ++j) {
-					std::getline(file, line);
-					output += line + "\n";
-					if (std::regex_search(line.begin(), line.end(), rgx)) {
-						j = 0;
-					}
-				}
-			} catch (...) {
-				std::cout << "ERROR: Could not grab line because it did not exist.\n";
-			}
+	std::string output;
+	int linesGrabbed = 0;
+	std::string extraLine;  
+
+	while (linesGrabbed < flags.extra && std::getline(info.file, extraLine)) {
+		output += extraLine + "\n";
+		linesGrabbed++;
+
+		if (std::regex_search(extraLine, info.pattern)) {
+			linesGrabbed = 0;  // Reset on match
 		}
 	}
+	return output;
 }
+
+void Perg::findPatternMatches(Info& info , std::string & output) const{
+	if (shouldOutputLine(info)) {
+		output += formatOutput(info);
+		output += getExtraLinesIfNeeded(info);
+	}
+}
+
+std::string Perg::getFilePathsFront() {
+	std::string fileName;
+	#pragma omp critical
+	{
+		fileName = filePaths.front();
+		filePaths.pop();
+	}
+	return fileName;
+}
+
+std::optional<std::ifstream> Perg::openFile(const std::string &fileName) {
+	std::ifstream file(fileName);
+	if (!file.is_open())
+		return std::nullopt;
+	return file;
+}
+
+void Perg::printFormatedOutput(const std::string &output) const {
+	if (!output.empty()) {
+		#pragma omp critical
+		std::cout << output << (flags.extra ? "--\n" : "");
+	}
+}
+
+
+std::vector<std::string> Perg::getFiles() {
+	std::vector<std::string> filesToProcess;
+	#pragma omp critical
+	{
+		while (!filePaths.empty()) {
+			filesToProcess.push_back(filePaths.front());
+			filePaths.pop();
+		}
+	}
+	return filesToProcess;
+}
+
 
 void Perg::printMultiple() {
 	std::regex rgx(flags.pattern);
+	auto filesToProcess = getFiles();
 
 	#pragma omp parallel for schedule(dynamic)
-	for (unsigned long long i = 0; i < static_cast<unsigned long long>(filePaths.size()); ++i) {
-		std::string fileName;
-		std::string output;
+	for (size_t i = 0; i < filesToProcess.size(); ++i) {
+		const std::string& fileName = filesToProcess[i];
+		std::string accumulatedOutput;
 
-		#pragma omp critical
-		{
-			fileName = filePaths.front();
-			filePaths.pop();
+		auto fileOpt = openFile(fileName);
+		if (!fileOpt) continue;
+
+		// Create Info once per file, not per line
+		Info info{"", rgx, fileName, std::move(fileOpt.value())};
+
+		while (std::getline(info.file, info.line)) {
+			std::string lineOutput;
+			findPatternMatches(info, lineOutput);
+			accumulatedOutput += lineOutput;
 		}
 
-		std::ifstream file(fileName);
-		if (!file.is_open()) {
-			#pragma omp critical
-			std::cerr << "ERROR: Could not open file: " << fileName << std::endl;
-			continue;
-		}
-
-		std::string line;
-		while (std::getline(file, line)) {
-			output.clear();
-			findPatternMatches(line, rgx, output, fileName, file);
-
-			if (!output.empty()) {
-				#pragma omp critical
-				std::cout << output << (flags.extra ? "--\n" : "");
-			}
-		}
+		printFormatedOutput(accumulatedOutput);
 	}
 }
 
-unsigned long long Perg::getTotalLines(std::ifstream &file) {
-	unsigned long long counter = 0;
+
+
+
+std::string Perg::getFront() {
+	std::string front = filePaths.front().string();
+	filePaths.pop();
+	return front;
+}
+
+std::vector<std::string> getLines(std::ifstream& file) {
+	std::vector<std::string> lines;
 	std::string line;
-	while (std::getline(file , line)) {
-		counter++;
+	while (std::getline(file, line)) {
+		lines.push_back(line);
 	}
-	return counter;
-}
-
-
-void Perg::getExtraContext(std::ifstream& file , std::string line , std::string& output ,
-	unsigned long long lineNum , unsigned long long maxLines , std::regex& rgx) {
-	try {
-		for (int k = 0; k < flags.numExtra && lineNum < maxLines; ++k) {
-			std::getline(file, line);
-			lineNum++;
-			output += line + "\n";
-			if (std::regex_search(line.begin(), line.end(), rgx)) {
-				k = 0; // Reset counter but watch for infinite loops
-			}
-		}
-	} catch (...) {
-		std::cout << "ERROR: Could not grab line because it did not exist.\n";
-	}
-}
-
-std::string Perg::findPatternMatches(std::string &line, std::regex& rgx, std::ifstream& file,
-                                   unsigned long long& lineNum, unsigned long long maxLines) {
-    std::string output;
-    if (!std::regex_search(line.begin(), line.end(), rgx) && flags.invert) {
-        output += flags.verbose ? filePaths.front().string() + ": " + line + "\n" : line + "\n";
-    } else if (std::regex_search(line.begin(), line.end(), rgx) && !flags.invert) {
-        output += flags.verbose ? filePaths.front().string() + ": " + line + "\n" : line + "\n";
-        if (flags.extra) {
-        	getExtraContext(file , line , output , lineNum , maxLines , rgx);
-        }
-    }
-    return output;
+	return lines;
 }
 
 void Perg::printSingle() {
-    while (!filePaths.empty()) {
-        std::string currentFile = filePaths.front().string();
-        std::ifstream file1(currentFile);
-        unsigned long long linesNum= getTotalLines(file1);
-    	std::regex rgx(flags.pattern);
-        file1.close();
+	while (!filePaths.empty()) {
+		std::string currentFile = getFront();
+		auto file = openFile(currentFile);
+		if (!file) return;
 
-    	// don't forget to adjust this
-        int threadsNum = 10;
-        unsigned long long blockSize = linesNum/ threadsNum + 1;
+		std::regex rgx(flags.pattern);
+		std::string line;
 
-        #pragma omp parallel for schedule(static)
-        for (int i = 0; i < threadsNum; ++i) {
-            std::ifstream file2(currentFile);
-            std::string line;
-            unsigned long long start = i * blockSize;
-            unsigned long long end = std::min(linesNum, start + blockSize);
+		auto lines = getLines(file.value());
 
-            // Seek to starting position
-            for (unsigned long long j = 0; j < start; ++j) {
-                std::getline(file2, line);
-            }
-
-            // Process assigned block
-            for (unsigned long long j = start; j < end; ++j) {
-                std::getline(file2, line);
-                std::string output = findPatternMatches(line, rgx, file2, j, end);
-                if (!output.empty()) {
-                    #pragma omp critical
-                    std::cout << output << (flags.extra ? "--\n" : "");
-                }
-            }
-        }
-        filePaths.pop();
-    }
+		#pragma omp parallel for
+		for (size_t i = 0; i < lines.size(); ++i) {
+			if (std::regex_search(lines[i], rgx)) {
+				#pragma omp critical
+				{
+					std::cout << (flags.verbose ? currentFile + ": " : "")
+							  << lines[i] << "\n";
+				}
+			}
+		}
+	}
 }
 
 
@@ -281,7 +290,7 @@ void Perg::findAll(std::filesystem::path& path) {
 		for (auto& entry : std::filesystem::recursive_directory_iterator(path)) {
 			if (!std::filesystem::is_directory(entry) &&
 				(flags.checkHidden || entry.path().filename().string()[0] != '.')) {
-				filePaths.push(entry.path());
+					filePaths.push(entry.path());
 				}
 		}
 	} else {

@@ -7,19 +7,11 @@ Need at least either GNU C Compiler (4.9) with OpenMP or Intel C Compiler with O
 Compiler must have C++11 support.
 
 ## Installation
-### GNU C Compiler
-    g++ -std=c++11 -fopenmp -O3 -o bin/perg src/perg.cpp
+    $ mkdir build
+    $ cd build  
+    $ cmake ..
+    $ make
 
-### Makefile
-    make
-    make install
-    
-### Intel C Compiler
-    icc -std=c++11 -openmp -O3 -o bin/perg src/perg.cpp
-    
-### Makefile
-    make icc
-    make install
 
 ## Usage
 ### Command Syntax:
@@ -46,3 +38,6 @@ Compiler must have C++11 support.
     -w    File Parallelism      Signals perg to perform single-threaded searches of multiple files. Default
                                 search behavior is to search files one at a time with mulitple threads.
                                 This is optimal when the files are small, similar size, or there are many.
+
+
+
